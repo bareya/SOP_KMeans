@@ -131,8 +131,8 @@ struct ClusterSum
 	{
 		for(auto point=r.begin(); point!=r.end(); ++point)
 		{
-			const auto cluster = closestCluster(point);
-			new_means(cluster) += data(point);
+			const auto cluster = closestCluster[point];
+			new_means[cluster] += data[point];
 			counts[cluster] += 1;
 		}
 	}
@@ -141,8 +141,8 @@ struct ClusterSum
 	{
 		for(exint cluster=0; cluster<k; ++cluster)
 		{
-			new_means(cluster) += rhs.new_means(cluster);
-			counts(cluster) += rhs.counts(cluster);
+			new_means[cluster] += rhs.new_means[cluster];
+			counts[cluster] += rhs.counts[cluster];
 		}
 	}
 
@@ -215,6 +215,7 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		ClosestCluster cCluster(k, data, means, closestCluster);
 		UTparallelForLightItems(UT_BlockedRange<exint>(0, dataSize), cCluster);
 
+		//
 		ClusterSum cSum(k, data, closestCluster);
 		UTparallelReduceLightItems(UT_BlockedRange<exint>(0, dataSize), cSum);
 
@@ -222,7 +223,7 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		for (exint cluster=0; cluster<k; ++cluster)
 		{
 			const auto count = std::max<exint>(1, cSum.counts[cluster]);
-			means(cluster) = cSum.new_means(cluster)/count;
+			means[cluster] = cSum.new_means[cluster]/count;
 		}
 	}
 
