@@ -10,3 +10,5 @@ Here you can find an attempt to make cluster calculation a bit faster. Code was 
 
 `k-means++` is not implemented yet, I might consider implementing it in the future.
 
+My research was based on [Peter Goldsborough's](http://www.goldsborough.me/c++/python/cuda/2017/09/10/20-32-46-exploring_k-means_in_python,_c++_and_cuda/) tutorial.
+
