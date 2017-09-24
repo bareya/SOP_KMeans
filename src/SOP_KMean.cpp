@@ -33,7 +33,6 @@ SOFTWARE.
 #include <UT/UT_Interrupt.h>
 #include <UT/UT_ParallelUtil.h>
 
-#include <tbb/tbb.h>
 #include <random>
 
 static PRM_Name numClustersName("num_clusters", "Clusters");
@@ -89,9 +88,9 @@ struct ClosestCluster
 		: k(k), data(d), means(m), closestCluster(a)
 	{}
 
-	void operator()(const tbb::blocked_range<exint>& r) const
+	void operator()(const UT_BlockedRange<exint>& r) const
 	{
-		for(exint point=r.begin(); point!=r.end(); ++point)
+		for(auto point=r.begin(); point!=r.end(); ++point)
 		{
 			auto max_distance = std::numeric_limits<fpreal32>::max();
 			exint closest_cluster = 0;
@@ -124,13 +123,13 @@ struct ClusterSum
 		: k(k), data(d), closestCluster(a), new_means(k,k), counts(k,k)
 	{}
 
-	ClusterSum(ClusterSum& other, tbb::split)
+	ClusterSum(ClusterSum& other, UT_Split)
 		: k(other.k), data(other.data), closestCluster(other.closestCluster), new_means(k,k), counts(k,k)
 	{}
 
-	void operator()(const tbb::blocked_range<exint>& r)
+	void operator()(const UT_BlockedRange<exint>& r)
 	{
-		for(exint point=r.begin(); point!=r.end(); ++point)
+		for(auto point=r.begin(); point!=r.end(); ++point)
 		{
 			const auto cluster = closestCluster(point);
 			new_means(cluster) += data(point);
@@ -214,10 +213,10 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 
 		// computes index of closest cluster
 		ClosestCluster cCluster(k, data, means, closestCluster);
-		tbb::parallel_for(tbb::blocked_range<exint>(0, dataSize), cCluster);
+		UTparallelForLightItems(UT_BlockedRange<exint>(0, dataSize), cCluster);
 
 		ClusterSum cSum(k, data, closestCluster);
-		tbb::parallel_reduce(tbb::blocked_range<exint>(0, dataSize), cSum);
+		UTparallelReduceLightItems(UT_BlockedRange<exint>(0, dataSize), cSum);
 
 		// mean
 		for (exint cluster=0; cluster<k; ++cluster)
@@ -255,11 +254,14 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		if(!clusterAttrib) clusterAttrib = gdp->addIntTuple(GA_ATTRIB_POINT, GA_SCOPE_PUBLIC, clusterAttribStr, 1);
 		GA_RWHandleI clusterHandle(clusterAttrib);
 
-		for(exint i=0;i<closestCluster.size(); ++i)
+		UTparallelForLightItems(UT_BlockedRange<exint>(0,closestCluster.size()), [&](const UT_BlockedRange<exint>& r)
 		{
-			GA_Offset off = gdp->pointOffset(i);
-			clusterHandle.set(off, closestCluster[i]);
-		}
+			for(auto i=r.begin(); i!=r.end(); ++i)
+			{
+				GA_Offset off = gdp->pointOffset(i);
+				clusterHandle.set(off, closestCluster[i]);
+			}
+		});
 	}
 
 	return error();
