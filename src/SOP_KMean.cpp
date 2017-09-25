@@ -156,6 +156,40 @@ struct ClusterSum
 	UT_Array<exint> counts;
 };
 
+static bool computeKMeans(const UT_Array<UT_Vector3>& data, UT_Array<UT_Vector3F>& means, UT_Array<exint>& closestCluster, exint iterations, UT_AutoInterrupt& boss)
+{
+	exint dataSize = data.size();
+	exint k = means.size();
+
+	closestCluster.clear();
+	closestCluster.setSize(dataSize);
+
+	for (exint iteration = 0; iteration<iterations; ++iteration)
+	{
+		int processPercent = static_cast<int>(100*static_cast<float>(iteration)/(static_cast<float>(iterations)-1));
+		if(boss.getInterrupt()->opInterrupt(processPercent))
+		{
+			return false;
+		}
+
+		// computes index of closest cluster
+		ClosestCluster cCluster(k, data, means, closestCluster);
+		UTparallelForLightItems(UT_BlockedRange<exint>(0, dataSize), cCluster);
+
+		//
+		ClusterSum cSum(k, data, closestCluster);
+		UTparallelReduceLightItems(UT_BlockedRange<exint>(0, dataSize), cSum);
+
+		// mean
+		for (exint cluster=0; cluster<k; ++cluster)
+		{
+			const auto count = std::max<exint>(1, cSum.counts[cluster]);
+			means[cluster] = cSum.new_means[cluster]/count;
+		}
+	}
+
+	return true;
+}
 
 OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 {
@@ -181,6 +215,7 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 	// position, and means
 	UT_Array<UT_Vector3> data;
 	UT_Array<UT_Vector3F> means(k,k);
+	UT_Array<exint> closestCluster;
 
 	// fill positions
 	input->getPos3AsArray(input->getPointRange(), data);
@@ -202,29 +237,9 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		}
 	}
 
-	UT_Array<exint> closestCluster(dataSize, dataSize);
-	for (exint iteration = 0; iteration<iterations; ++iteration)
+	if(!computeKMeans(data, means, closestCluster, iterations, boss))
 	{
-		int processPercent = static_cast<int>(100*static_cast<float>(iteration)/(static_cast<float>(iterations)-1));
-		if(boss.getInterrupt()->opInterrupt(processPercent))
-		{
-			return error();
-		}
-
-		// computes index of closest cluster
-		ClosestCluster cCluster(k, data, means, closestCluster);
-		UTparallelForLightItems(UT_BlockedRange<exint>(0, dataSize), cCluster);
-
-		//
-		ClusterSum cSum(k, data, closestCluster);
-		UTparallelReduceLightItems(UT_BlockedRange<exint>(0, dataSize), cSum);
-
-		// mean
-		for (exint cluster=0; cluster<k; ++cluster)
-		{
-			const auto count = std::max<exint>(1, cSum.counts[cluster]);
-			means[cluster] = cSum.new_means[cluster]/count;
-		}
+		return error();
 	}
 
 	// output parameters
