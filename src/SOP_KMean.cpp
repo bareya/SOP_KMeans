@@ -34,6 +34,7 @@ SOFTWARE.
 #include <UT/UT_ParallelUtil.h>
 
 #include <random>
+#include "kmeans.h"
 
 static PRM_Name numClustersName("num_clusters", "Clusters");
 static PRM_Default numClustersDefault(10);
@@ -50,7 +51,7 @@ static PRM_Default randomSeedDefault(0);
 static PRM_Name iterationsName("iterations", "Iterations");
 static PRM_Default iterationsDefault(50);
 
-static PRM_Name kmeanppName("kmeanpp", "Use K-Mean++ for Initialization");
+static PRM_Name kmeanppName("kmeanpp", "Use K-Mean++ Initialization");
 static PRM_Default kmeanppDefault(0);
 
 // create parameter template
@@ -61,7 +62,7 @@ PRM_Template SOP_KMean::myTemplate[] =
 	PRM_Template(PRM_TOGGLE, 1, &outputCenterName, &outputCenterDefault),
 	PRM_Template(PRM_INT, 1, &iterationsName, &iterationsDefault),
 	PRM_Template(PRM_INT, 1, &randomSeedName, &randomSeedDefault),
-	//PRM_Template(PRM_TOGGLE, 1, &kmeanppName, &kmeanppDefault),
+	PRM_Template(PRM_TOGGLE, 1, &kmeanppName, &kmeanppDefault),
 	PRM_Template()
 };
 
@@ -84,8 +85,8 @@ SOP_KMean::SOP_KMean(OP_Network* net, const char *name, OP_Operator* op)
 //
 struct ClosestCluster
 {
-	ClosestCluster(exint k, const UT_Array<UT_Vector3F>& d, const UT_Array<UT_Vector3F>& m, UT_Array<exint>& a)
-		: k(k), data(d), means(m), closestCluster(a)
+	ClosestCluster(const UT_Array<UT_Vector3F>& d, const UT_Array<UT_Vector3F>& m, UT_Array<exint>& a, UT_Array<fpreal32>& dist)
+		: myData(d), means(m), k(means.size()), myClosestCluster(a), myDistances(dist)
 	{}
 
 	void operator()(const UT_BlockedRange<exint>& r) const
@@ -96,30 +97,32 @@ struct ClosestCluster
 			exint closest_cluster = 0;
 			for (exint cluster = 0; cluster<k; ++cluster)
 			{
-				const fpreal32 distance  = data[point].distance2(means[cluster]);
+				const auto distance  = myData[point].distance2(means[cluster]);
 				if (distance < max_distance)
 				{
 					max_distance = distance;
 					closest_cluster = cluster;
 				}
 			}
-			closestCluster[point] = closest_cluster;
+			myClosestCluster[point] = closest_cluster;
+			myDistances[point] = max_distance;
 		}
 	}
 
 	// input data
-	const exint k; // number of clusters
-	const UT_Array<UT_Vector3F>& data; // data to process, positon
+	const UT_Array<UT_Vector3F>& myData; // data to process, positon
 	const UT_Array<UT_Vector3F>& means; // mean valuses k length
+	const exint k{}; // number of clusters
 
 	// output data
-	UT_Array<exint>& closestCluster;
+	UT_Array<exint>& myClosestCluster;
+	UT_Array<fpreal32>& myDistances; //
 };
 
 //
 struct ClusterSum
 {
-	ClusterSum(const exint& k, const UT_Array<UT_Vector3F>& d, const UT_Array<exint>& a)
+	ClusterSum(exint k, const UT_Array<UT_Vector3F>& d, const UT_Array<exint>& a)
 		: k(k), data(d), closestCluster(a), new_means(k,k), counts(k,k)
 	{}
 
@@ -137,7 +140,7 @@ struct ClusterSum
 		}
 	}
 
-	void join(ClusterSum& rhs)
+	void join(const ClusterSum& rhs)
 	{
 		for(exint cluster=0; cluster<k; ++cluster)
 		{
@@ -147,7 +150,7 @@ struct ClusterSum
 	}
 
 	// input data
-	const exint& k; // number of clusters
+	const exint k; // number of clusters
 	const UT_Array<UT_Vector3F>& data; // data to process, position
 	const UT_Array<exint>& closestCluster;
 
@@ -156,31 +159,36 @@ struct ClusterSum
 	UT_Array<exint> counts;
 };
 
-static bool computeKMeans(const UT_Array<UT_Vector3>& data, UT_Array<UT_Vector3F>& means, UT_Array<exint>& closestCluster, exint iterations, UT_AutoInterrupt& boss)
+// data - input
+// means - random inital k clusters
+// closestCluster - id of closest cluster
+// iterations - number of total iterations
+// boss - iterrupt mechanism
+static bool computeKMeans(const UT_Array<UT_Vector3>& data, UT_Array<UT_Vector3F>& means, UT_Array<exint>& closestCluster, UT_Array<fpreal32>& distances, exint iterations, UT_Interrupt* boss=nullptr)
 {
-	exint dataSize = data.size();
-	exint k = means.size();
+	const auto dataSize = data.size();
+	const auto k = means.size();
 
 	closestCluster.clear();
 	closestCluster.setSize(dataSize);
 
 	for (exint iteration = 0; iteration<iterations; ++iteration)
 	{
-		int processPercent = static_cast<int>(100*static_cast<float>(iteration)/(static_cast<float>(iterations)-1));
-		if(boss.getInterrupt()->opInterrupt(processPercent))
+		if(boss)
 		{
-			return false;
+			int processPercent = static_cast<int>(100*static_cast<float>(iteration)/(static_cast<float>(iterations)-1));
+			if(boss->opInterrupt(processPercent)) return false;
 		}
 
 		// computes index of closest cluster
-		ClosestCluster cCluster(k, data, means, closestCluster);
+		ClosestCluster cCluster(data, means, closestCluster, distances);
 		UTparallelForLightItems(UT_BlockedRange<exint>(0, dataSize), cCluster);
 
 		//
 		ClusterSum cSum(k, data, closestCluster);
 		UTparallelReduceLightItems(UT_BlockedRange<exint>(0, dataSize), cSum);
 
-		// mean
+		// update input means/clusters
 		for (exint cluster=0; cluster<k; ++cluster)
 		{
 			const auto count = std::max<exint>(1, cSum.counts[cluster]);
@@ -189,6 +197,29 @@ static bool computeKMeans(const UT_Array<UT_Vector3>& data, UT_Array<UT_Vector3F
 	}
 
 	return true;
+}
+
+static void computeKMeansPP(const UT_Array<UT_Vector3>& data, const exint k, const exint seed, UT_Array<UT_Vector3F>& means)
+{
+	const auto dataSize = data.size();
+
+	std::mt19937 random_number_generator(seed);
+	std::uniform_int_distribution<exint> indices(0, dataSize-1);
+
+	// init output storage
+	means.clear();
+	means.setCapacity(k);
+
+	// pick inital c0
+	means.append(data[indices(random_number_generator)]);
+
+	for(exint i=1; i<k; ++i)
+	{
+		// distances ?
+
+
+		//means.append()
+	}
 }
 
 OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
@@ -213,13 +244,16 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 	exint iterations = evalInt("iterations", 0, time);
 
 	// position, and means
-	UT_Array<UT_Vector3> data;
+	UT_Array<UT_Vector3F> data;
 	UT_Array<UT_Vector3F> means(k,k);
 	UT_Array<exint> closestCluster;
 
 	// fill positions
 	input->getPos3AsArray(input->getPointRange(), data);
-	exint dataSize = data.size();
+	auto dataSize = data.size();
+
+	// distances
+	UT_Array<fpreal32> distances(dataSize, dataSize);
 
 	// use second input if valid, otherwise pick random points
 	if(second)
@@ -231,13 +265,15 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		// fill centers random generator, TODO use second input points
 		std::mt19937 random_number_generator(seed);
 		std::uniform_int_distribution<exint> indices(0, dataSize-1);
+
+		// two methods: random points or kmeanspp
 		for(auto& cluster: means)
 		{
 			cluster = data[indices(random_number_generator)];
 		}
 	}
 
-	if(!computeKMeans(data, means, closestCluster, iterations, boss))
+	if(!computeKMeans(data, means, closestCluster, distances, iterations, boss.getInterrupt()))
 	{
 		return error();
 	}
