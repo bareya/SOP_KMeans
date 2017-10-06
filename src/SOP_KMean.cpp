@@ -105,17 +105,21 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 	exint iterations = evalInt("iterations", 0, time);
 
 	// position, and means
-	UT_Array<UT_Vector3> data;
-	UT_Array<UT_Vector3F> means(k,k);
+	std::vector<UT_Vector3F> data(input->getNumPoints(), {0,0,0});
+	std::vector<UT_Vector3F> means(k,{0,0,0});
 
 	// fill positions
-	input->getPos3AsArray(input->getPointRange(), data);
+	for(auto it = input->getPointRange().begin(); !it.atEnd(); ++it)
+	{
+		data[it.getIndex()] = input->getPos3(*it);
+	}
+	//input->getPos3AsArray(input->getPointRange(), data);
 	exint dataSize = data.size();
 
 	// use second input if valid, otherwise pick random points
 	if(second)
 	{
-		second->getPos3AsArray(second->getPointRange(), means);
+		//second->getPos3AsArray(second->getPointRange(), means);
 	}
 	else
 	{
@@ -128,7 +132,7 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		}
 	}
 
-	UT_Array<exint> closestCluster(dataSize, dataSize);
+	std::vector<exint> closestCluster(dataSize, 0);
 	for (exint iteration = 0; iteration<iterations; ++iteration)
 	{
 		int processPercent = static_cast<int>(100*static_cast<float>(iteration)/(static_cast<float>(iterations)-1));
@@ -138,7 +142,7 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		}
 
 		// computes index of closest cluster
-		ClosestCluster cCluster(k, data, means, closestCluster);
+		ClosestCluster<UT_Vector3F> cCluster(k, data, means, closestCluster);
 		tbb::parallel_for(tbb::blocked_range<exint>(0, dataSize), cCluster);
 
 		ClusterSum cSum(k, data, closestCluster);
@@ -148,7 +152,7 @@ OP_ERROR SOP_KMean::cookMySop(OP_Context &context)
 		for (exint cluster=0; cluster<k; ++cluster)
 		{
 			const auto count = std::max<exint>(1, cSum.counts[cluster]);
-			means(cluster) = cSum.new_means(cluster)/count;
+			means[cluster] = cSum.new_means[cluster]/count;
 		}
 	}
 

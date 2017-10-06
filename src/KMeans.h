@@ -4,9 +4,13 @@
 #include <vector>
 
 //
+
+template<typename V>
 struct ClosestCluster
 {
-	ClosestCluster(exint k, const UT_Array<UT_Vector3F>& d, const UT_Array<UT_Vector3F>& m, UT_Array<exint>& a)
+	using point_type = V;
+
+	ClosestCluster(exint k, const std::vector<point_type>& d, const std::vector<point_type>& m, std::vector<exint>& a)
 		: k(k), data(d), means(m), closestCluster(a)
 	{}
 
@@ -31,17 +35,17 @@ struct ClosestCluster
 
 	// input data
 	const exint k; // number of clusters
-	const UT_Array<UT_Vector3F>& data; // data to process, positon
-	const UT_Array<UT_Vector3F>& means; // mean valuses k length
+	const std::vector<point_type>& data; // data to process, positon
+	const std::vector<point_type>& means; // mean valuses k length
 
 	// output data
-	UT_Array<exint>& closestCluster;
+	std::vector<exint>& closestCluster;
 };
 
 //
 struct ClusterSum
 {
-	ClusterSum(const exint& k, const UT_Array<UT_Vector3F>& d, const UT_Array<exint>& a)
+	ClusterSum(const exint& k, const std::vector<UT_Vector3F>& d, const std::vector<exint>& a)
 		: k(k), data(d), closestCluster(a), new_means(k,k), counts(k,k)
 	{}
 
@@ -70,8 +74,8 @@ struct ClusterSum
 
 	// input data
 	const exint& k; // number of clusters
-	const UT_Array<UT_Vector3F>& data; // data to process, position
-	const UT_Array<exint>& closestCluster;
+	const std::vector<UT_Vector3F>& data; // data to process, position
+	const std::vector<exint>& closestCluster;
 
 	// output data
 	UT_Array<UT_Vector3F> new_means;
